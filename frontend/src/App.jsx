@@ -25,7 +25,7 @@ function App() {
 
       <StatusCard status={status} />
 
-      <AlertBox />
+      <AlertBox alert={status.alert} />
 
       <div className="flex justify-center gap-6 mt-8">
         <button className="bg-green-600 px-8 py-3 rounded-xl hover:bg-green-700">
