@@ -3,13 +3,11 @@ import cv2
 
 
 class VehicleDetector:
-
     def __init__(self):
-        # Load YOLO model only once
         self.model = YOLO("models/yolov8n.pt")
 
-        # COCO vehicle classes
-        self.vehicle_classes = {
+        self.target_classes = {
+            0: "Person",
             1: "Bicycle",
             2: "Car",
             3: "Motorcycle",
@@ -18,12 +16,14 @@ class VehicleDetector:
         }
 
     def detect(self, frame):
-
         detections = []
 
         results = self.model.predict(
             source=frame,
-            conf=0.5,
+            conf=0.25,
+            iou=0.45,
+            imgsz=640,
+            device="cpu",
             verbose=False
         )
 
@@ -31,37 +31,34 @@ class VehicleDetector:
             for box in result.boxes:
 
                 cls = int(box.cls[0])
+                conf = float(box.conf[0])
 
-                if cls not in self.vehicle_classes:
+                if cls not in self.target_classes:
                     continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-                confidence = float(box.conf[0])
-
-                vehicle_name = self.vehicle_classes[cls]
+                label = self.target_classes[cls]
 
                 detections.append({
-                    "vehicle": vehicle_name,
-                    "confidence": confidence,
-                    "box": (x1, y1, x2, y2)
+                    "class": label,
+                    "confidence": round(conf, 2),
+                    "bbox": [x1, y1, x2, y2]
                 })
 
-                cv2.rectangle(
-                    frame,
-                    (x1, y1),
-                    (x2, y2),
-                    (0, 255, 0),
-                    2
-                )
+                color = (0, 255, 0)
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+                text = f"{label} {conf:.2f}"
 
                 cv2.putText(
                     frame,
-                    f"{vehicle_name} {confidence:.2f}",
+                    text,
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    (0, 255, 0),
+                    color,
                     2
                 )
 
