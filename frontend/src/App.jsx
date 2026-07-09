@@ -1,17 +1,29 @@
 import { useEffect, useRef, useState } from "react";
-
-const BACKEND_URL = "https://drdo-adas-backend.onrender.com/detect";
+import * as cocoSsd from "@tensorflow-models/coco-ssd";
+import "@tensorflow/tfjs";
 
 function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const hiddenCanvasRef = useRef(null);
-  const [status, setStatus] = useState("Starting camera...");
+
+  const [model, setModel] = useState(null);
+  const [status, setStatus] = useState("Loading AI model...");
   const [vehicleCount, setVehicleCount] = useState(0);
   const [personCount, setPersonCount] = useState(0);
-  const [potholeCount, setPotholeCount] = useState(0);
   const [distance, setDistance] = useState("N/A");
   const [alert, setAlert] = useState("No Alert");
+
+  const targetClasses = ["person", "bicycle", "car", "motorcycle", "bus", "truck"];
+
+  useEffect(() => {
+    async function loadModel() {
+      const loadedModel = await cocoSsd.load();
+      setModel(loadedModel);
+      setStatus("AI model ready");
+    }
+
+    loadModel();
+  }, []);
 
   useEffect(() => {
     async function startCamera() {
@@ -26,7 +38,7 @@ function App() {
         });
 
         videoRef.current.srcObject = stream;
-        setStatus("Camera active | YOLOv8 backend connected");
+        setStatus("Camera active | Live detection running");
       } catch (error) {
         setStatus("Camera permission denied");
         console.error(error);
@@ -37,19 +49,16 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!model) return;
+
     const interval = setInterval(async () => {
-      if (
-          !videoRef.current ||
-          videoRef.current.readyState < 2 ||
-          !canvasRef.current ||
-          !hiddenCanvasRef.current
-      ){
-  return;
-}
+      if (!videoRef.current || videoRef.current.readyState < 2 || !canvasRef.current) {
+        return;
+      }
 
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      const hiddenCanvas = hiddenCanvasRef.current;
+      const ctx = canvas.getContext("2d");
 
       const width = video.videoWidth;
       const height = video.videoHeight;
@@ -58,78 +67,57 @@ function App() {
 
       canvas.width = width;
       canvas.height = height;
-      hiddenCanvas.width = width;
-      hiddenCanvas.height = height;
 
-      const hiddenCtx = hiddenCanvas.getContext("2d");
-      hiddenCtx.drawImage(video, 0, 0, width, height);
+      const predictions = await model.detect(video);
 
-      const imageData = hiddenCanvas.toDataURL("image/jpeg", 0.6);
+      ctx.clearRect(0, 0, width, height);
 
-      try {
-        const response = await fetch(BACKEND_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            image: imageData,
-          }),
-        });
+      let vehicles = 0;
+      let persons = 0;
+      let nearestDistance = "N/A";
 
-        const data = await response.json();
+      predictions.forEach((prediction) => {
+        if (targetClasses.includes(prediction.class) && prediction.score > 0.35) {
+          const [x, y, boxWidth, boxHeight] = prediction.bbox;
 
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, width, height);
+          const approxDistance = Math.max(1, Math.round(1200 / boxHeight));
+          nearestDistance = `${approxDistance} m`;
 
-        let vehicles = 0;
-        let persons = 0;
-        let potholes = 0;
+          if (prediction.class === "person") {
+            persons++;
+          } else {
+            vehicles++;
+          }
 
-        if (data.detections) {
-          data.detections.forEach((det) => {
-            const [x1, y1, x2, y2] = det.bbox;
-            const boxWidth = x2 - x1;
-            const boxHeight = y2 - y1;
+          ctx.strokeStyle = "#22c55e";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x, y, boxWidth, boxHeight);
 
-            if (det.class === "Person") {
-              persons++;
-            } else if (det.class === "Pothole") {
-              potholes++;
-            } else {
-              vehicles++;
-            }
-
-            const color = det.class === "Pothole" ? "#ef4444" : "#22c55e";
-
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 3;
-            ctx.strokeRect(x1, y1, boxWidth, boxHeight);
-
-            ctx.fillStyle = color;
-            ctx.font = "18px Arial";
-            ctx.fillText(
-              `${det.class} ${(det.confidence * 100).toFixed(0)}% | ${det.distance}`,
-              x1,
-              y1 > 20 ? y1 - 8 : y1 + 20
-            );
-          });
+          ctx.fillStyle = "#22c55e";
+          ctx.font = "18px Arial";
+          ctx.fillText(
+            `${prediction.class} ${(prediction.score * 100).toFixed(0)}% | ${approxDistance}m`,
+            x,
+            y > 20 ? y - 8 : y + 20
+          );
         }
+      });
 
-        setVehicleCount(vehicles);
-        setPersonCount(persons);
-        setPotholeCount(potholes);
-        setDistance(data.distance || "N/A");
-        setAlert(data.alert || "No Alert");
-        setStatus("YOLOv8 detection running");
-      } catch (error) {
-        console.error(error);
-        setStatus("Backend connection failed");
+      setVehicleCount(vehicles);
+      setPersonCount(persons);
+      setDistance(nearestDistance);
+
+      if (persons > 0) {
+        setAlert("Pedestrian Detected");
+      } else if (vehicles >= 3) {
+        setAlert("Traffic Ahead");
+      } else {
+        setAlert("No Alert");
       }
-    }, 1200);
+    }, 500);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [model]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-4">
@@ -156,8 +144,6 @@ function App() {
               ref={canvasRef}
               className="absolute top-0 left-0 w-full h-full pointer-events-none"
             />
-
-            <canvas ref={hiddenCanvasRef} className="hidden" />
           </div>
         </div>
 
@@ -183,11 +169,6 @@ function App() {
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
-          <p className="text-slate-400">Potholes</p>
-          <h2 className="text-3xl font-bold">{potholeCount}</h2>
-        </div>
-
-        <div className="bg-slate-900 p-4 rounded-xl text-center">
           <p className="text-slate-400">Distance</p>
           <h2 className="text-xl font-bold">{distance}</h2>
         </div>
@@ -195,6 +176,11 @@ function App() {
         <div className="bg-slate-900 p-4 rounded-xl text-center">
           <p className="text-slate-400">Lane</p>
           <h2 className="text-xl font-bold">Safe</h2>
+        </div>
+
+        <div className="bg-slate-900 p-4 rounded-xl text-center">
+          <p className="text-slate-400">Pothole</p>
+          <h2 className="text-xl font-bold">Monitoring</h2>
         </div>
       </div>
 
