@@ -4,13 +4,15 @@ from ultralytics import YOLO
 import cv2
 import numpy as np
 import base64
-import os
+
 
 app = Flask(__name__)
 CORS(app)
 
+
+# Load only ONE model for Render free plan
 vehicle_model = YOLO("models/yolov8n.pt")
-pothole_model = YOLO("models/best.pt")
+
 
 TARGET_CLASSES = {
     0: "Person",
@@ -33,13 +35,14 @@ def decode_image(image_data):
 def estimate_distance(box_height):
     if box_height <= 0:
         return "N/A"
+
     distance = round(1200 / box_height, 1)
     return f"{distance} m"
 
 
 @app.route("/")
 def home():
-    return "YOLOv8 ADAS Backend Running"
+    return "YOLOv8 ADAS Backend Running - Vehicle Detection Active"
 
 
 @app.route("/detect", methods=["POST"])
@@ -61,7 +64,8 @@ def detect():
         source=frame,
         conf=0.25,
         iou=0.45,
-        imgsz=640,
+        imgsz=416,
+        device="cpu",
         verbose=False
     )
 
@@ -75,6 +79,7 @@ def detect():
 
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             label = TARGET_CLASSES[cls]
+
             box_height = y2 - y1
             distance = estimate_distance(box_height)
 
@@ -93,33 +98,8 @@ def detect():
                 "type": "vehicle"
             })
 
-    pothole_results = pothole_model.predict(
-        source=frame,
-        conf=0.25,
-        iou=0.45,
-        imgsz=640,
-        verbose=False
-    )
-
-    for result in pothole_results:
-        for box in result.boxes:
-            conf = float(box.conf[0])
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-            pothole_count += 1
-
-            detections.append({
-                "class": "Pothole",
-                "confidence": round(conf, 2),
-                "bbox": [x1, y1, x2, y2],
-                "distance": "Road Surface",
-                "type": "pothole"
-            })
-
     if pedestrian_count > 0:
         alert = "Pedestrian Detected"
-    elif pothole_count > 0:
-        alert = "Pothole Detected"
     elif vehicle_count >= 3:
         alert = "Traffic Ahead"
     else:
