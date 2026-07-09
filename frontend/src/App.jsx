@@ -39,13 +39,13 @@ function App() {
   useEffect(() => {
     const interval = setInterval(async () => {
       if (
-        !videoRef.current ||
-        videoRef.current.readyState !== 4 ||
-        !canvasRef.current ||
-        !hiddenCanvasRef.current
-      ) {
-        return;
-      }
+          !videoRef.current ||
+          videoRef.current.readyState < 2 ||
+          !canvasRef.current ||
+          !hiddenCanvasRef.current
+      ){
+  return;
+}
 
       const video = videoRef.current;
       const canvas = canvasRef.current;
