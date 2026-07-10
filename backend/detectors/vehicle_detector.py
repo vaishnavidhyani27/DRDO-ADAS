@@ -1,65 +1,71 @@
 from ultralytics import YOLO
-import cv2
+from utils.distance_estimator import estimate_distance
+
+
+TARGET_CLASSES = {
+    0: "Person",
+    1: "Bicycle",
+    2: "Car",
+    3: "Motorcycle",
+    5: "Bus",
+    7: "Truck",
+}
 
 
 class VehicleDetector:
-    def __init__(self):
-        self.model = YOLO("models/yolov8n.pt")
-
-        self.target_classes = {
-            0: "Person",
-            1: "Bicycle",
-            2: "Car",
-            3: "Motorcycle",
-            5: "Bus",
-            7: "Truck"
-        }
+    def __init__(self, model_path):
+        self.model = YOLO(model_path)
 
     def detect(self, frame):
-        detections = []
-
         results = self.model.predict(
             source=frame,
             conf=0.25,
             iou=0.45,
-            imgsz=640,
+            imgsz=512,
             device="cpu",
-            verbose=False
+            verbose=False,
         )
+
+        detections = []
+        vehicle_count = 0
+        pedestrian_count = 0
+        distances = []
 
         for result in results:
             for box in result.boxes:
+                class_id = int(box.cls[0])
+                confidence = float(box.conf[0])
 
-                cls = int(box.cls[0])
-                conf = float(box.conf[0])
-
-                if cls not in self.target_classes:
+                if class_id not in TARGET_CLASSES:
                     continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
+                label = TARGET_CLASSES[class_id]
 
-                label = self.target_classes[cls]
+                box_height = y2 - y1
+                distance_m = estimate_distance(label, box_height)
+
+                if label == "Person":
+                    pedestrian_count += 1
+                else:
+                    vehicle_count += 1
+
+                if distance_m is not None:
+                    distances.append(distance_m)
 
                 detections.append({
                     "class": label,
-                    "confidence": round(conf, 2),
-                    "bbox": [x1, y1, x2, y2]
+                    "confidence": round(confidence, 2),
+                    "bbox": [x1, y1, x2, y2],
+                    "distance_m": distance_m,
+                    "type": "road_object",
                 })
 
-                color = (0, 255, 0)
+        nearest_distance = min(distances) if distances else None
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
-                text = f"{label} {conf:.2f}"
-
-                cv2.putText(
-                    frame,
-                    text,
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    color,
-                    2
-                )
-
-        return frame, detections
+        return {
+            "detections": detections,
+            "vehicle_count": vehicle_count,
+            "pedestrian_count": pedestrian_count,
+            "nearest_distance_m": nearest_distance,
+        }
