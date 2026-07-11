@@ -17,6 +17,29 @@ function App() {
   const [potholeCount, setPotholeCount] = useState(0);
   const [distance, setDistance] = useState("N/A");
   const [alert, setAlert] = useState("No Alert");
+  const [audioEnabled, setAudioEnabled] = useState(false);
+
+  function enableAudio() {
+    if (!window.speechSynthesis) {
+      setStatus("Audio alerts are not supported on this device");
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const testSpeech = new SpeechSynthesisUtterance(
+      "Audio alerts enabled"
+    );
+
+    testSpeech.rate = 1;
+    testSpeech.pitch = 1;
+    testSpeech.volume = 1;
+
+    window.speechSynthesis.speak(testSpeech);
+
+    setAudioEnabled(true);
+    setStatus("Audio alerts enabled");
+  }
 
   useEffect(() => {
     let cameraStream;
@@ -92,7 +115,10 @@ function App() {
 
         captureContext.drawImage(video, 0, 0, width, height);
 
-        const imageData = captureCanvas.toDataURL("image/jpeg", 0.8);
+        const imageData = captureCanvas.toDataURL(
+          "image/jpeg",
+          0.8
+        );
 
         const response = await fetch(BACKEND_URL, {
           method: "POST",
@@ -130,20 +156,34 @@ function App() {
           : [];
 
         detections.forEach((detection) => {
-          if (!Array.isArray(detection.bbox)) {
+          if (
+            !Array.isArray(detection.bbox) ||
+            detection.bbox.length !== 4
+          ) {
             return;
           }
 
           const [x1, y1, x2, y2] = detection.bbox;
+
           const boxWidth = x2 - x1;
           const boxHeight = y2 - y1;
 
-          const isPothole = detection.class === "Pothole";
-          const boxColor = isPothole ? "#ef4444" : "#22c55e";
+          const isPothole =
+            detection.class === "Pothole";
+
+          const boxColor = isPothole
+            ? "#ef4444"
+            : "#22c55e";
 
           context.strokeStyle = boxColor;
           context.lineWidth = 4;
-          context.strokeRect(x1, y1, boxWidth, boxHeight);
+
+          context.strokeRect(
+            x1,
+            y1,
+            boxWidth,
+            boxHeight
+          );
 
           const confidence = Math.round(
             (detection.confidence || 0) * 100
@@ -160,10 +200,14 @@ function App() {
 
           context.font = "18px Arial";
 
-          const textWidth = context.measureText(label).width;
-          const labelY = y1 > 30 ? y1 - 28 : y1;
+          const textWidth =
+            context.measureText(label).width;
+
+          const labelY =
+            y1 > 30 ? y1 - 28 : y1;
 
           context.fillStyle = boxColor;
+
           context.fillRect(
             x1,
             labelY,
@@ -172,6 +216,7 @@ function App() {
           );
 
           context.fillStyle = "#ffffff";
+
           context.fillText(
             label,
             x1 + 7,
@@ -195,27 +240,34 @@ function App() {
             : "N/A"
         );
 
-        const currentAlert = data.alert || "No Alert";
+        const currentAlert =
+          data.alert || "No Alert";
 
         setAlert(currentAlert);
 
         const currentTime = Date.now();
+
         const cooldownExpired =
-          currentTime - lastSpokenTimeRef.current >= 5000;
+          currentTime -
+            lastSpokenTimeRef.current >=
+          5000;
 
         const alertChanged =
-          currentAlert !== lastSpokenAlertRef.current;
+          currentAlert !==
+          lastSpokenAlertRef.current;
 
         if (
+          audioEnabled &&
           currentAlert !== "No Alert" &&
           window.speechSynthesis &&
           (alertChanged || cooldownExpired)
         ) {
           window.speechSynthesis.cancel();
 
-          const speech = new SpeechSynthesisUtterance(
-            currentAlert
-          );
+          const speech =
+            new SpeechSynthesisUtterance(
+              currentAlert
+            );
 
           speech.rate = 1;
           speech.pitch = 1;
@@ -223,15 +275,22 @@ function App() {
 
           window.speechSynthesis.speak(speech);
 
-          lastSpokenAlertRef.current = currentAlert;
-          lastSpokenTimeRef.current = currentTime;
+          lastSpokenAlertRef.current =
+            currentAlert;
+
+          lastSpokenTimeRef.current =
+            currentTime;
         }
 
         if (currentAlert === "No Alert") {
           lastSpokenAlertRef.current = "";
         }
 
-        setStatus("YOLOv8 live detection running");
+        setStatus(
+          audioEnabled
+            ? "YOLOv8 detection running | Audio enabled"
+            : "YOLOv8 live detection running"
+        );
       } catch (error) {
         console.error("Detection error:", error);
         setStatus("Backend connection failed");
@@ -241,7 +300,7 @@ function App() {
     }, 1200);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [audioEnabled]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-4">
@@ -252,6 +311,22 @@ function App() {
       <p className="text-center text-slate-400 mt-2">
         {status}
       </p>
+
+      <div className="flex justify-center mt-3">
+        <button
+          type="button"
+          onClick={enableAudio}
+          className={`px-5 py-2 rounded-xl font-semibold ${
+            audioEnabled
+              ? "bg-green-700"
+              : "bg-blue-600"
+          }`}
+        >
+          {audioEnabled
+            ? "Audio Alerts Enabled"
+            : "Enable Audio Alerts"}
+        </button>
+      </div>
 
       <div className="grid md:grid-cols-2 gap-6 mt-6">
         <div className="bg-slate-900 rounded-2xl p-4 shadow-lg">
@@ -295,35 +370,50 @@ function App() {
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6">
         <div className="bg-slate-900 p-4 rounded-xl text-center">
-          <p className="text-slate-400">Vehicles</p>
+          <p className="text-slate-400">
+            Vehicles
+          </p>
+
           <h2 className="text-3xl font-bold">
             {vehicleCount}
           </h2>
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
-          <p className="text-slate-400">Pedestrians</p>
+          <p className="text-slate-400">
+            Pedestrians
+          </p>
+
           <h2 className="text-3xl font-bold">
             {personCount}
           </h2>
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
-          <p className="text-slate-400">Distance</p>
+          <p className="text-slate-400">
+            Distance
+          </p>
+
           <h2 className="text-xl font-bold">
             {distance}
           </h2>
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
-          <p className="text-slate-400">Lane</p>
+          <p className="text-slate-400">
+            Lane
+          </p>
+
           <h2 className="text-xl font-bold">
             Safe
           </h2>
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
-          <p className="text-slate-400">Potholes</p>
+          <p className="text-slate-400">
+            Potholes
+          </p>
+
           <h2 className="text-3xl font-bold">
             {potholeCount}
           </h2>
