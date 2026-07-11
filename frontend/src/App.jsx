@@ -8,6 +8,8 @@ function App() {
   const canvasRef = useRef(null);
   const captureCanvasRef = useRef(null);
   const processingRef = useRef(false);
+  const lastSpokenAlertRef = useRef("");
+  const lastSpokenTimeRef = useRef(0);
 
   const [status, setStatus] = useState("Starting camera...");
   const [vehicleCount, setVehicleCount] = useState(0);
@@ -48,6 +50,8 @@ function App() {
       if (cameraStream) {
         cameraStream.getTracks().forEach((track) => track.stop());
       }
+
+      window.speechSynthesis?.cancel();
     };
   }, []);
 
@@ -81,10 +85,14 @@ function App() {
         captureCanvas.height = height;
 
         const captureContext = captureCanvas.getContext("2d");
+
+        if (!captureContext) {
+          throw new Error("Unable to access capture canvas");
+        }
+
         captureContext.drawImage(video, 0, 0, width, height);
 
-        // Compress the frame before sending it to the backend.
-        const imageData = captureCanvas.toDataURL("image/jpeg", 0.65);
+        const imageData = captureCanvas.toDataURL("image/jpeg", 0.8);
 
         const response = await fetch(BACKEND_URL, {
           method: "POST",
@@ -98,6 +106,7 @@ function App() {
 
         if (!response.ok) {
           const errorText = await response.text();
+
           throw new Error(
             `Backend returned ${response.status}: ${errorText}`
           );
@@ -109,6 +118,11 @@ function App() {
         overlayCanvas.height = height;
 
         const context = overlayCanvas.getContext("2d");
+
+        if (!context) {
+          throw new Error("Unable to access overlay canvas");
+        }
+
         context.clearRect(0, 0, width, height);
 
         const detections = Array.isArray(data.detections)
@@ -116,6 +130,10 @@ function App() {
           : [];
 
         detections.forEach((detection) => {
+          if (!Array.isArray(detection.bbox)) {
+            return;
+          }
+
           const [x1, y1, x2, y2] = detection.bbox;
           const boxWidth = x2 - x1;
           const boxHeight = y2 - y1;
@@ -141,28 +159,78 @@ function App() {
             `${detection.class} ${confidence}%${distanceText}`;
 
           context.font = "18px Arial";
+
           const textWidth = context.measureText(label).width;
           const labelY = y1 > 30 ? y1 - 28 : y1;
 
           context.fillStyle = boxColor;
-          context.fillRect(labelY === y1 ? x1 : x1, labelY, textWidth + 14, 28);
+          context.fillRect(
+            x1,
+            labelY,
+            textWidth + 14,
+            28
+          );
 
           context.fillStyle = "#ffffff";
-          context.fillText(label, x1 + 7, labelY + 20);
+          context.fillText(
+            label,
+            x1 + 7,
+            labelY + 20
+          );
         });
 
         setVehicleCount(data.vehicle_count ?? 0);
         setPersonCount(data.pedestrian_count ?? 0);
         setPotholeCount(data.pothole_count ?? 0);
 
+        const nearestDistance =
+          data.nearest_pothole_distance_m ??
+          data.nearest_vehicle_distance_m ??
+          data.nearest_distance_m;
+
         setDistance(
-          data.nearest_distance_m !== null &&
-            data.nearest_distance_m !== undefined
-            ? `${data.nearest_distance_m} m`
+          nearestDistance !== null &&
+            nearestDistance !== undefined
+            ? `${nearestDistance} m`
             : "N/A"
         );
 
-        setAlert(data.alert || "No Alert");
+        const currentAlert = data.alert || "No Alert";
+
+        setAlert(currentAlert);
+
+        const currentTime = Date.now();
+        const cooldownExpired =
+          currentTime - lastSpokenTimeRef.current >= 5000;
+
+        const alertChanged =
+          currentAlert !== lastSpokenAlertRef.current;
+
+        if (
+          currentAlert !== "No Alert" &&
+          window.speechSynthesis &&
+          (alertChanged || cooldownExpired)
+        ) {
+          window.speechSynthesis.cancel();
+
+          const speech = new SpeechSynthesisUtterance(
+            currentAlert
+          );
+
+          speech.rate = 1;
+          speech.pitch = 1;
+          speech.volume = 1;
+
+          window.speechSynthesis.speak(speech);
+
+          lastSpokenAlertRef.current = currentAlert;
+          lastSpokenTimeRef.current = currentTime;
+        }
+
+        if (currentAlert === "No Alert") {
+          lastSpokenAlertRef.current = "";
+        }
+
         setStatus("YOLOv8 live detection running");
       } catch (error) {
         console.error("Detection error:", error);
@@ -181,11 +249,15 @@ function App() {
         Smart ADAS Detection System
       </h1>
 
-      <p className="text-center text-slate-400 mt-2">{status}</p>
+      <p className="text-center text-slate-400 mt-2">
+        {status}
+      </p>
 
       <div className="grid md:grid-cols-2 gap-6 mt-6">
         <div className="bg-slate-900 rounded-2xl p-4 shadow-lg">
-          <h2 className="text-xl font-semibold mb-3">Road Camera</h2>
+          <h2 className="text-xl font-semibold mb-3">
+            Road Camera
+          </h2>
 
           <div className="relative w-full overflow-hidden rounded-xl">
             <video
@@ -224,33 +296,45 @@ function App() {
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6">
         <div className="bg-slate-900 p-4 rounded-xl text-center">
           <p className="text-slate-400">Vehicles</p>
-          <h2 className="text-3xl font-bold">{vehicleCount}</h2>
+          <h2 className="text-3xl font-bold">
+            {vehicleCount}
+          </h2>
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
           <p className="text-slate-400">Pedestrians</p>
-          <h2 className="text-3xl font-bold">{personCount}</h2>
+          <h2 className="text-3xl font-bold">
+            {personCount}
+          </h2>
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
           <p className="text-slate-400">Distance</p>
-          <h2 className="text-xl font-bold">{distance}</h2>
+          <h2 className="text-xl font-bold">
+            {distance}
+          </h2>
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
           <p className="text-slate-400">Lane</p>
-          <h2 className="text-xl font-bold">Safe</h2>
+          <h2 className="text-xl font-bold">
+            Safe
+          </h2>
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
           <p className="text-slate-400">Potholes</p>
-          <h2 className="text-3xl font-bold">{potholeCount}</h2>
+          <h2 className="text-3xl font-bold">
+            {potholeCount}
+          </h2>
         </div>
       </div>
 
       <div
         className={`mt-6 p-4 rounded-xl text-center text-xl font-bold ${
-          alert === "No Alert" ? "bg-green-700" : "bg-red-700"
+          alert === "No Alert"
+            ? "bg-green-700"
+            : "bg-red-700"
         }`}
       >
         {alert}
