@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const BACKEND_URL =
-  "https://lists-talk-applicant-prince.trycloudflare.com/detect";
+  "https://amino-hint-gone-donor.trycloudflare.com/detect";
 
 function App() {
   const videoRef = useRef(null);
