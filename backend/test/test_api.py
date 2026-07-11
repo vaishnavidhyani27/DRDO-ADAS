@@ -2,7 +2,7 @@ import base64
 import requests
 
 
-IMAGE_PATH = "test_images/car.jpg"
+IMAGE_PATH = "test_images/pothole.jpg"
 API_URL = "http://127.0.0.1:5000/detect"
 
 

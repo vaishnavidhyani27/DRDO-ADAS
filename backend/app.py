@@ -6,18 +6,36 @@ import numpy as np
 import os
 
 from detectors.vehicle_detector import VehicleDetector
+from detectors.pothole_detector import PotholeDetector
 
 
 app = Flask(__name__)
-CORS(app)
+
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+    allow_headers=["Content-Type"],
+    methods=["GET", "POST", "OPTIONS"],
+)
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-VEHICLE_MODEL_PATH = os.path.join(BASE_DIR, "models", "yolov8n.pt")
-POTHOLE_MODEL_PATH = os.path.join(BASE_DIR, "models", "best.pt")
+
+VEHICLE_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "models",
+    "yolov8n.pt",
+)
+
+POTHOLE_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "models",
+    "best.pt",
+)
 
 
 vehicle_detector = VehicleDetector(VEHICLE_MODEL_PATH)
+pothole_detector = PotholeDetector(POTHOLE_MODEL_PATH)
 
 
 def decode_image(image_data):
@@ -48,7 +66,7 @@ def home():
             "service": "DRDO ADAS YOLOv8 API",
             "status": "running",
             "vehicle_model": "loaded",
-            "pothole_model": "pending modular integration",
+            "pothole_model": "loaded",
         }
     )
 
@@ -59,12 +77,16 @@ def health():
         {
             "status": "healthy",
             "vehicle_detector": "ready",
+            "pothole_detector": "ready",
         }
     )
 
 
-@app.route("/detect", methods=["POST"])
+@app.route("/detect", methods=["POST", "OPTIONS"])
 def detect():
+    if request.method == "OPTIONS":
+        return "", 204
+
     try:
         data = request.get_json(silent=True)
 
@@ -74,20 +96,49 @@ def detect():
         frame = decode_image(data["image"])
 
         vehicle_result = vehicle_detector.detect(frame)
+        pothole_result = pothole_detector.detect(frame)
 
-        detections = vehicle_result["detections"]
+        detections = (
+            vehicle_result["detections"]
+            + pothole_result["detections"]
+        )
+
         vehicle_count = vehicle_result["vehicle_count"]
         pedestrian_count = vehicle_result["pedestrian_count"]
-        nearest_distance = vehicle_result["nearest_distance_m"]
+        nearest_vehicle_distance = vehicle_result["nearest_distance_m"]
 
-        pothole_count = 0
+        pothole_count = pothole_result["pothole_count"]
+        nearest_pothole_distance = pothole_result[
+            "nearest_pothole_distance_m"
+        ]
 
-        if pedestrian_count > 0:
+        if (
+            nearest_pothole_distance is not None
+            and nearest_pothole_distance <= 4
+        ):
+            alert = (
+                f"Warning. Pothole detected at "
+                f"{nearest_pothole_distance} meters"
+            )
+
+        elif nearest_pothole_distance is not None:
+            alert = (
+                f"Pothole detected at "
+                f"{nearest_pothole_distance} meters"
+            )
+
+        elif pedestrian_count > 0:
             alert = "Pedestrian Detected"
-        elif nearest_distance is not None and nearest_distance <= 4:
-            alert = "Object Too Close"
+
+        elif (
+            nearest_vehicle_distance is not None
+            and nearest_vehicle_distance <= 4
+        ):
+            alert = "Vehicle Too Close"
+
         elif vehicle_count >= 3:
             alert = "Traffic Ahead"
+
         else:
             alert = "No Alert"
 
@@ -97,7 +148,9 @@ def detect():
                 "vehicle_count": vehicle_count,
                 "pedestrian_count": pedestrian_count,
                 "pothole_count": pothole_count,
-                "nearest_distance_m": nearest_distance,
+                "nearest_vehicle_distance_m": nearest_vehicle_distance,
+                "nearest_pothole_distance_m": nearest_pothole_distance,
+                "nearest_distance_m": nearest_vehicle_distance,
                 "alert": alert,
             }
         )

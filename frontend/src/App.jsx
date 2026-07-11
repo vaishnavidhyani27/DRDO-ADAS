@@ -1,34 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import * as cocoSsd from "@tensorflow-models/coco-ssd";
-import "@tensorflow/tfjs";
+
+const BACKEND_URL =
+  "https://reception-shirts-coffee-alignment.trycloudflare.com/detect";
 
 function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const captureCanvasRef = useRef(null);
+  const processingRef = useRef(false);
 
-  const [model, setModel] = useState(null);
-  const [status, setStatus] = useState("Loading AI model...");
+  const [status, setStatus] = useState("Starting camera...");
   const [vehicleCount, setVehicleCount] = useState(0);
   const [personCount, setPersonCount] = useState(0);
+  const [potholeCount, setPotholeCount] = useState(0);
   const [distance, setDistance] = useState("N/A");
   const [alert, setAlert] = useState("No Alert");
 
-  const targetClasses = ["person", "bicycle", "car", "motorcycle", "bus", "truck"];
-
   useEffect(() => {
-    async function loadModel() {
-      const loadedModel = await cocoSsd.load();
-      setModel(loadedModel);
-      setStatus("AI model ready");
-    }
+    let cameraStream;
 
-    loadModel();
-  }, []);
-
-  useEffect(() => {
     async function startCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        cameraStream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
             width: { ideal: 640 },
@@ -37,87 +30,150 @@ function App() {
           audio: false,
         });
 
-        videoRef.current.srcObject = stream;
-        setStatus("Camera active | Live detection running");
+        if (videoRef.current) {
+          videoRef.current.srcObject = cameraStream;
+          await videoRef.current.play();
+        }
+
+        setStatus("Camera active | Connecting to YOLOv8...");
       } catch (error) {
+        console.error("Camera error:", error);
         setStatus("Camera permission denied");
-        console.error(error);
       }
     }
 
     startCamera();
+
+    return () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((track) => track.stop());
+      }
+    };
   }, []);
 
   useEffect(() => {
-    if (!model) return;
-
     const interval = setInterval(async () => {
-      if (!videoRef.current || videoRef.current.readyState < 2 || !canvasRef.current) {
+      const video = videoRef.current;
+      const overlayCanvas = canvasRef.current;
+      const captureCanvas = captureCanvasRef.current;
+
+      if (
+        processingRef.current ||
+        !video ||
+        !overlayCanvas ||
+        !captureCanvas ||
+        video.readyState < 2
+      ) {
         return;
       }
-
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext("2d");
 
       const width = video.videoWidth;
       const height = video.videoHeight;
 
-      if (!width || !height) return;
+      if (!width || !height) {
+        return;
+      }
 
-      canvas.width = width;
-      canvas.height = height;
+      processingRef.current = true;
 
-      const predictions = await model.detect(video);
+      try {
+        captureCanvas.width = width;
+        captureCanvas.height = height;
 
-      ctx.clearRect(0, 0, width, height);
+        const captureContext = captureCanvas.getContext("2d");
+        captureContext.drawImage(video, 0, 0, width, height);
 
-      let vehicles = 0;
-      let persons = 0;
-      let nearestDistance = "N/A";
+        // Compress the frame before sending it to the backend.
+        const imageData = captureCanvas.toDataURL("image/jpeg", 0.65);
 
-      predictions.forEach((prediction) => {
-        if (targetClasses.includes(prediction.class) && prediction.score > 0.35) {
-          const [x, y, boxWidth, boxHeight] = prediction.bbox;
+        const response = await fetch(BACKEND_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            image: imageData,
+          }),
+        });
 
-          const approxDistance = Math.max(1, Math.round(1200 / boxHeight));
-          nearestDistance = `${approxDistance} m`;
-
-          if (prediction.class === "person") {
-            persons++;
-          } else {
-            vehicles++;
-          }
-
-          ctx.strokeStyle = "#22c55e";
-          ctx.lineWidth = 3;
-          ctx.strokeRect(x, y, boxWidth, boxHeight);
-
-          ctx.fillStyle = "#22c55e";
-          ctx.font = "18px Arial";
-          ctx.fillText(
-            `${prediction.class} ${(prediction.score * 100).toFixed(0)}% | ${approxDistance}m`,
-            x,
-            y > 20 ? y - 8 : y + 20
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(
+            `Backend returned ${response.status}: ${errorText}`
           );
         }
-      });
 
-      setVehicleCount(vehicles);
-      setPersonCount(persons);
-      setDistance(nearestDistance);
+        const data = await response.json();
 
-      if (persons > 0) {
-        setAlert("Pedestrian Detected");
-      } else if (vehicles >= 3) {
-        setAlert("Traffic Ahead");
-      } else {
-        setAlert("No Alert");
+        overlayCanvas.width = width;
+        overlayCanvas.height = height;
+
+        const context = overlayCanvas.getContext("2d");
+        context.clearRect(0, 0, width, height);
+
+        const detections = Array.isArray(data.detections)
+          ? data.detections
+          : [];
+
+        detections.forEach((detection) => {
+          const [x1, y1, x2, y2] = detection.bbox;
+          const boxWidth = x2 - x1;
+          const boxHeight = y2 - y1;
+
+          const isPothole = detection.class === "Pothole";
+          const boxColor = isPothole ? "#ef4444" : "#22c55e";
+
+          context.strokeStyle = boxColor;
+          context.lineWidth = 4;
+          context.strokeRect(x1, y1, boxWidth, boxHeight);
+
+          const confidence = Math.round(
+            (detection.confidence || 0) * 100
+          );
+
+          const distanceText =
+            detection.distance_m !== null &&
+            detection.distance_m !== undefined
+              ? ` | ${detection.distance_m} m`
+              : "";
+
+          const label =
+            `${detection.class} ${confidence}%${distanceText}`;
+
+          context.font = "18px Arial";
+          const textWidth = context.measureText(label).width;
+          const labelY = y1 > 30 ? y1 - 28 : y1;
+
+          context.fillStyle = boxColor;
+          context.fillRect(labelY === y1 ? x1 : x1, labelY, textWidth + 14, 28);
+
+          context.fillStyle = "#ffffff";
+          context.fillText(label, x1 + 7, labelY + 20);
+        });
+
+        setVehicleCount(data.vehicle_count ?? 0);
+        setPersonCount(data.pedestrian_count ?? 0);
+        setPotholeCount(data.pothole_count ?? 0);
+
+        setDistance(
+          data.nearest_distance_m !== null &&
+            data.nearest_distance_m !== undefined
+            ? `${data.nearest_distance_m} m`
+            : "N/A"
+        );
+
+        setAlert(data.alert || "No Alert");
+        setStatus("YOLOv8 live detection running");
+      } catch (error) {
+        console.error("Detection error:", error);
+        setStatus("Backend connection failed");
+      } finally {
+        processingRef.current = false;
       }
-    }, 500);
+    }, 1200);
 
     return () => clearInterval(interval);
-  }, [model]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-4">
@@ -131,24 +187,32 @@ function App() {
         <div className="bg-slate-900 rounded-2xl p-4 shadow-lg">
           <h2 className="text-xl font-semibold mb-3">Road Camera</h2>
 
-          <div className="relative">
+          <div className="relative w-full overflow-hidden rounded-xl">
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
-              className="w-full rounded-xl object-contain"
+              className="block w-full rounded-xl"
             />
 
             <canvas
               ref={canvasRef}
-              className="absolute top-0 left-0 w-full h-full pointer-events-none"
+              className="absolute inset-0 w-full h-full pointer-events-none"
+            />
+
+            <canvas
+              ref={captureCanvasRef}
+              className="hidden"
             />
           </div>
         </div>
 
         <div className="bg-slate-900 rounded-2xl p-4 shadow-lg flex flex-col justify-center items-center">
-          <h2 className="text-xl font-semibold mb-3">Driver Camera</h2>
+          <h2 className="text-xl font-semibold mb-3">
+            Driver Camera
+          </h2>
+
           <div className="text-slate-400 text-center">
             Driver monitoring module active
             <br />
@@ -179,8 +243,8 @@ function App() {
         </div>
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
-          <p className="text-slate-400">Pothole</p>
-          <h2 className="text-xl font-bold">Monitoring</h2>
+          <p className="text-slate-400">Potholes</p>
+          <h2 className="text-3xl font-bold">{potholeCount}</h2>
         </div>
       </div>
 
