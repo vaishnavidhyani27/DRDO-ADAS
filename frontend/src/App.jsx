@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const BACKEND_URL =
-  "https://reception-shirts-coffee-alignment.trycloudflare.com/detect";
+"https://navigate-walt-costa-jet.trycloudflare.com/detect";
 
 function App() {
   const videoRef = useRef(null);
