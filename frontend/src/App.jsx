@@ -46,21 +46,24 @@ function App() {
 
     async function startCamera() {
       try {
-        cameraStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-          },
-          audio: false,
-        });
+        cameraStream =
+          await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+            },
+            audio: false,
+          });
 
         if (videoRef.current) {
           videoRef.current.srcObject = cameraStream;
           await videoRef.current.play();
         }
 
-        setStatus("Camera active | Connecting to YOLOv8...");
+        setStatus(
+          "Camera active | Connecting to YOLOv8..."
+        );
       } catch (error) {
         console.error("Camera error:", error);
         setStatus("Camera permission denied");
@@ -71,7 +74,9 @@ function App() {
 
     return () => {
       if (cameraStream) {
-        cameraStream.getTracks().forEach((track) => track.stop());
+        cameraStream
+          .getTracks()
+          .forEach((track) => track.stop());
       }
 
       window.speechSynthesis?.cancel();
@@ -107,18 +112,28 @@ function App() {
         captureCanvas.width = width;
         captureCanvas.height = height;
 
-        const captureContext = captureCanvas.getContext("2d");
+        const captureContext =
+          captureCanvas.getContext("2d");
 
         if (!captureContext) {
-          throw new Error("Unable to access capture canvas");
+          throw new Error(
+            "Unable to access capture canvas"
+          );
         }
 
-        captureContext.drawImage(video, 0, 0, width, height);
-
-        const imageData = captureCanvas.toDataURL(
-          "image/jpeg",
-          0.8
+        captureContext.drawImage(
+          video,
+          0,
+          0,
+          width,
+          height
         );
+
+        const imageData =
+          captureCanvas.toDataURL(
+            "image/jpeg",
+            0.8
+          );
 
         const response = await fetch(BACKEND_URL, {
           method: "POST",
@@ -143,15 +158,25 @@ function App() {
         overlayCanvas.width = width;
         overlayCanvas.height = height;
 
-        const context = overlayCanvas.getContext("2d");
+        const context =
+          overlayCanvas.getContext("2d");
 
         if (!context) {
-          throw new Error("Unable to access overlay canvas");
+          throw new Error(
+            "Unable to access overlay canvas"
+          );
         }
 
-        context.clearRect(0, 0, width, height);
+        context.clearRect(
+          0,
+          0,
+          width,
+          height
+        );
 
-        const detections = Array.isArray(data.detections)
+        const detections = Array.isArray(
+          data.detections
+        )
           ? data.detections
           : [];
 
@@ -163,7 +188,8 @@ function App() {
             return;
           }
 
-          const [x1, y1, x2, y2] = detection.bbox;
+          const [x1, y1, x2, y2] =
+            detection.bbox;
 
           const boxWidth = x2 - x1;
           const boxHeight = y2 - y1;
@@ -189,7 +215,12 @@ function App() {
             (detection.confidence || 0) * 100
           );
 
+          /*
+           * Distance is shown only for vehicles
+           * and pedestrians, not for potholes.
+           */
           const distanceText =
+            !isPothole &&
             detection.distance_m !== null &&
             detection.distance_m !== undefined
               ? ` | ${detection.distance_m} m`
@@ -224,19 +255,30 @@ function App() {
           );
         });
 
-        setVehicleCount(data.vehicle_count ?? 0);
-        setPersonCount(data.pedestrian_count ?? 0);
-        setPotholeCount(data.pothole_count ?? 0);
+        setVehicleCount(
+          data.vehicle_count ?? 0
+        );
 
-        const nearestDistance =
-          data.nearest_pothole_distance_m ??
+        setPersonCount(
+          data.pedestrian_count ?? 0
+        );
+
+        setPotholeCount(
+          data.pothole_count ?? 0
+        );
+
+        /*
+         * Dashboard distance now represents only
+         * the nearest vehicle or road object.
+         */
+        const nearestVehicleDistance =
           data.nearest_vehicle_distance_m ??
           data.nearest_distance_m;
 
         setDistance(
-          nearestDistance !== null &&
-            nearestDistance !== undefined
-            ? `${nearestDistance} m`
+          nearestVehicleDistance !== null &&
+            nearestVehicleDistance !== undefined
+            ? `${nearestVehicleDistance} m`
             : "N/A"
         );
 
@@ -273,7 +315,9 @@ function App() {
           speech.pitch = 1;
           speech.volume = 1;
 
-          window.speechSynthesis.speak(speech);
+          window.speechSynthesis.speak(
+            speech
+          );
 
           lastSpokenAlertRef.current =
             currentAlert;
@@ -292,8 +336,14 @@ function App() {
             : "YOLOv8 live detection running"
         );
       } catch (error) {
-        console.error("Detection error:", error);
-        setStatus("Backend connection failed");
+        console.error(
+          "Detection error:",
+          error
+        );
+
+        setStatus(
+          "Backend connection failed"
+        );
       } finally {
         processingRef.current = false;
       }
@@ -391,7 +441,7 @@ function App() {
 
         <div className="bg-slate-900 p-4 rounded-xl text-center">
           <p className="text-slate-400">
-            Distance
+            Nearest Vehicle
           </p>
 
           <h2 className="text-xl font-bold">
