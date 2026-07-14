@@ -1,20 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 
 const BACKEND_URL =
-  "https://newport-vendors-favorite-trek.trycloudflare.com/detect";
+  "https://webster-kyle-sewing-math.trycloudflare.com /detect";
 
-const REQUEST_INTERVAL_MS = 2500;
-const AUDIO_COOLDOWN_MS = 6000;
+const REQUEST_INTERVAL = 2200;
+const AUDIO_COOLDOWN = 6000;
 
 function App() {
   const videoRef = useRef(null);
   const overlayRef = useRef(null);
   const captureRef = useRef(null);
+
+  const streamRef = useRef(null);
+  const videoUrlRef = useRef(null);
   const processingRef = useRef(false);
   const lastAlertRef = useRef("");
-  const lastSpokenTimeRef = useRef(0);
+  const lastSpeechTimeRef = useRef(0);
 
+  const [mode, setMode] = useState("camera");
   const [status, setStatus] = useState("Starting camera...");
+  const [audioEnabled, setAudioEnabled] = useState(false);
+
   const [vehicleCount, setVehicleCount] = useState(0);
   const [personCount, setPersonCount] = useState(0);
   const [potholeCount, setPotholeCount] = useState(0);
@@ -22,7 +28,94 @@ function App() {
   const [laneStatus, setLaneStatus] = useState("Lane Not Detected");
   const [wrongWay, setWrongWay] = useState(false);
   const [alert, setAlert] = useState("No Alert");
-  const [audioEnabled, setAudioEnabled] = useState(false);
+
+  function stopCurrentSource() {
+    if (streamRef.current) {
+      streamRef.current
+        .getTracks()
+        .forEach((track) => track.stop());
+
+      streamRef.current = null;
+    }
+
+    if (videoUrlRef.current) {
+      URL.revokeObjectURL(videoUrlRef.current);
+      videoUrlRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+      videoRef.current.removeAttribute("src");
+      videoRef.current.load();
+    }
+  }
+
+  async function startCamera() {
+    stopCurrentSource();
+    setMode("camera");
+    setStatus("Starting road camera...");
+
+    try {
+      const stream =
+        await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.loop = false;
+        await videoRef.current.play();
+      }
+
+      setStatus("Live road camera active");
+    } catch (error) {
+      console.error("Camera error:", error);
+      setStatus("Camera permission denied");
+    }
+  }
+
+  async function handleVideoUpload(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    if (!file.type.startsWith("video/")) {
+      setStatus("Please select a valid video file");
+      return;
+    }
+
+    stopCurrentSource();
+    setMode("video");
+    setStatus("Loading road video...");
+
+    const url = URL.createObjectURL(file);
+    videoUrlRef.current = url;
+
+    if (videoRef.current) {
+      videoRef.current.src = url;
+      videoRef.current.muted = true;
+      videoRef.current.loop = true;
+
+      try {
+        await videoRef.current.play();
+        setStatus(`Processing uploaded video: ${file.name}`);
+      } catch (error) {
+        console.error("Video playback error:", error);
+        setStatus("Tap the video to start playback");
+      }
+    }
+
+    event.target.value = "";
+  }
 
   function enableAudio() {
     if (!window.speechSynthesis) {
@@ -36,32 +129,31 @@ function App() {
       "Audio alerts enabled"
     );
 
-    speech.rate = 1;
-    speech.volume = 1;
-
     window.speechSynthesis.speak(speech);
     setAudioEnabled(true);
-    setStatus("Audio alerts enabled");
   }
 
-  function drawPath(context, points, color, width = 5) {
+  function drawLine(context, points, color) {
     if (!Array.isArray(points) || points.length < 2) return;
 
     context.beginPath();
     context.moveTo(points[0][0], points[0][1]);
 
-    for (let i = 1; i < points.length; i += 1) {
-      context.lineTo(points[i][0], points[i][1]);
+    for (let index = 1; index < points.length; index += 1) {
+      context.lineTo(
+        points[index][0],
+        points[index][1]
+      );
     }
 
     context.strokeStyle = color;
-    context.lineWidth = width;
+    context.lineWidth = 6;
     context.lineJoin = "round";
     context.lineCap = "round";
     context.stroke();
   }
 
-  function drawLaneOverlay(context, data) {
+  function drawLanes(context, data) {
     const leftLane = Array.isArray(data.left_lane)
       ? data.left_lane
       : [];
@@ -74,29 +166,32 @@ function App() {
       ? data.lane_polygon
       : [];
 
-    const laneColor = data.lane_departure
+    if (polygon.length >= 4) {
+      context.beginPath();
+      context.moveTo(
+        polygon[0][0],
+        polygon[0][1]
+      );
+
+      polygon.slice(1).forEach(([x, y]) => {
+        context.lineTo(x, y);
+      });
+
+      context.closePath();
+
+      context.fillStyle = data.lane_departure
+        ? "rgba(239, 68, 68, 0.22)"
+        : "rgba(34, 197, 94, 0.22)";
+
+      context.fill();
+    }
+
+    const boundaryColor = data.lane_departure
       ? "#ef4444"
       : "#facc15";
 
-    if (polygon.length >= 4) {
-      context.save();
-      context.beginPath();
-      context.moveTo(polygon[0][0], polygon[0][1]);
-
-      for (let i = 1; i < polygon.length; i += 1) {
-        context.lineTo(polygon[i][0], polygon[i][1]);
-      }
-
-      context.closePath();
-      context.fillStyle = data.lane_departure
-        ? "rgba(239, 68, 68, 0.18)"
-        : "rgba(34, 197, 94, 0.16)";
-      context.fill();
-      context.restore();
-    }
-
-    drawPath(context, leftLane, laneColor);
-    drawPath(context, rightLane, laneColor);
+    drawLine(context, leftLane, boundaryColor);
+    drawLine(context, rightLane, boundaryColor);
   }
 
   function drawDetections(context, detections) {
@@ -109,12 +204,21 @@ function App() {
       }
 
       const [x1, y1, x2, y2] = detection.bbox;
-      const isPothole = detection.class === "Pothole";
-      const color = isPothole ? "#ef4444" : "#22c55e";
+      const isPothole =
+        detection.class === "Pothole";
+
+      const color = isPothole
+        ? "#ef4444"
+        : "#22c55e";
 
       context.strokeStyle = color;
       context.lineWidth = 4;
-      context.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      context.strokeRect(
+        x1,
+        y1,
+        x2 - x1,
+        y2 - y1
+      );
 
       const confidence = Math.round(
         (detection.confidence || 0) * 100
@@ -132,80 +236,66 @@ function App() {
 
       context.font = "18px Arial";
 
-      const textWidth = context.measureText(label).width;
-      const labelY = y1 > 32 ? y1 - 30 : y1;
+      const labelWidth =
+        context.measureText(label).width + 14;
+
+      const labelY = y1 > 30 ? y1 - 28 : y1;
 
       context.fillStyle = color;
-      context.fillRect(x1, labelY, textWidth + 14, 28);
+      context.fillRect(
+        x1,
+        labelY,
+        labelWidth,
+        28
+      );
 
       context.fillStyle = "#ffffff";
-      context.fillText(label, x1 + 7, labelY + 20);
+      context.fillText(
+        label,
+        x1 + 7,
+        labelY + 20
+      );
     });
   }
 
-  function speakAlert(currentAlert) {
+  function speakAlert(message) {
     if (
       !audioEnabled ||
       !window.speechSynthesis ||
-      currentAlert === "No Alert"
+      message === "No Alert"
     ) {
       return;
     }
 
     const now = Date.now();
-    const alertChanged =
-      currentAlert !== lastAlertRef.current;
+    const changed =
+      message !== lastAlertRef.current;
 
-    const cooldownExpired =
-      now - lastSpokenTimeRef.current >= AUDIO_COOLDOWN_MS;
+    const cooldownFinished =
+      now - lastSpeechTimeRef.current >=
+      AUDIO_COOLDOWN;
 
-    if (!alertChanged && !cooldownExpired) return;
+    if (!changed && !cooldownFinished) return;
 
     window.speechSynthesis.cancel();
 
-    const speech = new SpeechSynthesisUtterance(
-      currentAlert
-    );
+    const speech =
+      new SpeechSynthesisUtterance(message);
 
     speech.rate = 1;
     speech.volume = 1;
 
     window.speechSynthesis.speak(speech);
 
-    lastAlertRef.current = currentAlert;
-    lastSpokenTimeRef.current = now;
+    lastAlertRef.current = message;
+    lastSpeechTimeRef.current = now;
   }
 
   useEffect(() => {
-    let stream;
-
-    async function startCamera() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-          audio: false,
-        });
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-
-        setStatus("Camera active | Connecting to ADAS...");
-      } catch (error) {
-        console.error("Camera error:", error);
-        setStatus("Camera permission denied");
-      }
-    }
-
     startCamera();
 
     return () => {
-      stream?.getTracks().forEach((track) => track.stop());
+      stopCurrentSource();
       window.speechSynthesis?.cancel();
     };
   }, []);
@@ -221,7 +311,8 @@ function App() {
         !video ||
         !overlay ||
         !capture ||
-        video.readyState < 2
+        video.readyState < 2 ||
+        video.paused
       ) {
         return;
       }
@@ -234,61 +325,45 @@ function App() {
       processingRef.current = true;
 
       try {
-        const outputWidth = 960;
-        const outputHeight = 540;
-        const targetRatio = outputWidth / outputHeight;
-        const sourceRatio = width / height;
+        capture.width = width;
+        capture.height = height;
 
-        let sourceX = 0;      
-        let sourceY = 0;
-        let sourceWidth = width;
-        let sourceHeight = height;
+        const captureContext =
+          capture.getContext("2d");
 
-        if (sourceRatio > targetRatio) {
-          sourceWidth = height * targetRatio;
-          sourceX = (width - sourceWidth) / 2;
-        } else {
-          sourceHeight = width / targetRatio;
-          sourceY = (height - sourceHeight) / 2;
+        if (!captureContext) {
+          throw new Error(
+            "Capture canvas unavailable"
+          );
+        }
+
+        captureContext.drawImage(
+          video,
+          0,
+          0,
+          width,
+          height
+        );
+
+        const image = capture.toDataURL(
+          "image/jpeg",
+          0.82
+        );
+
+        const response = await fetch(
+          BACKEND_URL,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ image }),
           }
-
-        capture.width = outputWidth;
-        capture.height = outputHeight;
-
-        const captureContext = capture.getContext("2d");
-
-if (!captureContext) {
-  throw new Error("Capture canvas unavailable");
-}
-
-captureContext.drawImage(
-  video,
-  sourceX,
-  sourceY,
-  sourceWidth,
-  sourceHeight,
-  0,
-  0,
-  outputWidth,
-  outputHeight
-);
-
-const image = capture.toDataURL("image/jpeg", 0.82);
-
-
-        const response = await fetch(BACKEND_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ image }),
-        });
+        );
 
         if (!response.ok) {
-          const message = await response.text();
-
           throw new Error(
-            `Backend ${response.status}: ${message}`
+            `Backend returned ${response.status}`
           );
         }
 
@@ -297,15 +372,23 @@ const image = capture.toDataURL("image/jpeg", 0.82);
         overlay.width = width;
         overlay.height = height;
 
-        const context = overlay.getContext("2d");
+        const context =
+          overlay.getContext("2d");
 
         if (!context) {
-          throw new Error("Overlay canvas unavailable");
+          throw new Error(
+            "Overlay canvas unavailable"
+          );
         }
 
-        context.clearRect(0, 0, width, height);
+        context.clearRect(
+          0,
+          0,
+          width,
+          height
+        );
 
-        drawLaneOverlay(context, data);
+        drawLanes(context, data);
 
         drawDetections(
           context,
@@ -314,9 +397,17 @@ const image = capture.toDataURL("image/jpeg", 0.82);
             : []
         );
 
-        setVehicleCount(data.vehicle_count ?? 0);
-        setPersonCount(data.pedestrian_count ?? 0);
-        setPotholeCount(data.pothole_count ?? 0);
+        setVehicleCount(
+          data.vehicle_count ?? 0
+        );
+
+        setPersonCount(
+          data.pedestrian_count ?? 0
+        );
+
+        setPotholeCount(
+          data.pothole_count ?? 0
+        );
 
         const nearestVehicle =
           data.nearest_vehicle_distance_m ??
@@ -324,18 +415,20 @@ const image = capture.toDataURL("image/jpeg", 0.82);
 
         setDistance(
           nearestVehicle !== null &&
-          nearestVehicle !== undefined
+            nearestVehicle !== undefined
             ? `${nearestVehicle} m`
             : "N/A"
         );
 
         setLaneStatus(
-          data.lane_status || "Lane Not Detected"
+          data.lane_status ||
+            "Lane Not Detected"
         );
 
         setWrongWay(Boolean(data.wrong_way));
 
-        const currentAlert = data.alert || "No Alert";
+        const currentAlert =
+          data.alert || "No Alert";
 
         setAlert(currentAlert);
         speakAlert(currentAlert);
@@ -345,26 +438,31 @@ const image = capture.toDataURL("image/jpeg", 0.82);
         }
 
         setStatus(
-          audioEnabled
-            ? "Integrated ADAS running | Audio enabled"
-            : "Integrated ADAS running"
+          mode === "video"
+            ? "Uploaded road video analysis running"
+            : "Live integrated ADAS running"
         );
       } catch (error) {
-        console.error("Detection error:", error);
+        console.error(
+          "Detection error:",
+          error
+        );
+
         setStatus("Backend connection failed");
       } finally {
         processingRef.current = false;
       }
-    }, REQUEST_INTERVAL_MS);
+    }, REQUEST_INTERVAL);
 
     return () => clearInterval(interval);
-        }, [audioEnabled]);
+  }, [audioEnabled, mode]);
 
-  const laneClass = laneStatus.includes("Departure")
-    ? "text-red-400"
-    : laneStatus.includes("Safe")
-      ? "text-green-400"
-      : "text-yellow-400";
+  const laneColor =
+    laneStatus.includes("Departure")
+      ? "text-red-400"
+      : laneStatus.includes("Safe")
+        ? "text-green-400"
+        : "text-yellow-400";
 
   return (
     <div className="min-h-screen bg-slate-950 p-4 text-white">
@@ -376,7 +474,30 @@ const image = capture.toDataURL("image/jpeg", 0.82);
         {status}
       </p>
 
-      <div className="mt-3 flex justify-center">
+      <div className="mt-4 flex flex-wrap justify-center gap-3">
+        <button
+          type="button"
+          onClick={startCamera}
+          className={`rounded-xl px-5 py-2 font-semibold ${
+            mode === "camera"
+              ? "bg-green-700"
+              : "bg-slate-700"
+          }`}
+        >
+          Live Camera
+        </button>
+
+        <label className="cursor-pointer rounded-xl bg-purple-700 px-5 py-2 font-semibold">
+          Upload Road Video
+
+          <input
+            type="file"
+            accept="video/*"
+            onChange={handleVideoUpload}
+            className="hidden"
+          />
+        </label>
+
         <button
           type="button"
           onClick={enableAudio}
@@ -387,67 +508,70 @@ const image = capture.toDataURL("image/jpeg", 0.82);
           }`}
         >
           {audioEnabled
-            ? "Audio Alerts Enabled"
-            : "Enable Audio Alerts"}
+            ? "Audio Enabled"
+            : "Enable Audio"}
         </button>
       </div>
 
-      <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
-          <h2 className="mb-3 text-xl font-semibold">
-            Road Camera
-          </h2>
+      <div className="mt-6 rounded-2xl bg-slate-900 p-4">
+        <h2 className="mb-3 text-xl font-semibold">
+          Road Input
+        </h2>
 
-          <div className="relative w-full overflow-hidden rounded-xl">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="block w-full rounded-xl"
-            />
+        <div className="relative overflow-hidden rounded-xl">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            controls={mode === "video"}
+            className="block w-full"
+          />
 
-            <canvas
-              ref={overlayRef}
-              className="pointer-events-none absolute inset-0 h-full w-full"
-            />
+          <canvas
+            ref={overlayRef}
+            className="pointer-events-none absolute inset-0 h-full w-full"
+          />
 
-            <canvas
-              ref={captureRef}
-              className="hidden"
-            />
-          </div>
-        </div>
-
-        <div className="flex flex-col items-center justify-center rounded-2xl bg-slate-900 p-4 shadow-lg">
-          <h2 className="mb-3 text-xl font-semibold">
-            Driver Camera
-          </h2>
-
-          <div className="text-center text-slate-400">
-            Driver-monitoring module pending
-            <br />
-            Status: Not connected
-          </div>
+          <canvas
+            ref={captureRef}
+            className="hidden"
+          />
         </div>
       </div>
 
       <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-6">
-        <StatusCard label="Vehicles" value={vehicleCount} />
-        <StatusCard label="Pedestrians" value={personCount} />
-        <StatusCard label="Nearest Vehicle" value={distance} />
+        <StatusCard
+          label="Vehicles"
+          value={vehicleCount}
+        />
+
+        <StatusCard
+          label="Pedestrians"
+          value={personCount}
+        />
+
+        <StatusCard
+          label="Nearest Vehicle"
+          value={distance}
+        />
 
         <StatusCard
           label="Lane"
           value={laneStatus}
-          valueClass={laneClass}
+          valueClass={laneColor}
         />
 
-        <StatusCard label="Potholes" value={potholeCount} />
+        <StatusCard
+          label="Potholes"
+          value={potholeCount}
+        />
 
         <StatusCard
           label="Wrong Way"
-          value={wrongWay ? "Detected" : "Clear"}
+          value={
+            wrongWay ? "Detected" : "Clear"
+          }
           valueClass={
             wrongWay
               ? "text-red-400"
@@ -476,7 +600,9 @@ function StatusCard({
 }) {
   return (
     <div className="rounded-xl bg-slate-900 p-4 text-center">
-      <p className="text-slate-400">{label}</p>
+      <p className="text-slate-400">
+        {label}
+      </p>
 
       <h2
         className={`mt-1 text-xl font-bold ${valueClass}`}

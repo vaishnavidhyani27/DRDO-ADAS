@@ -388,12 +388,8 @@ class LaneDetector:
             height=height,
         )
 
+        self.opencv_fallback(frame)
         method = "UFLDv2"
-
-        if not left_lane or not right_lane:
-            left_lane = []
-            right_lane = []
-            method = "UFLDv2"
 
         polygon = (
             left_lane + list(reversed(right_lane))
