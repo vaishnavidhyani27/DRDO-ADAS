@@ -245,9 +245,7 @@ class LaneDetector:
         right_segments = []
 
         if lines is not None:
-            for line in lines[:, 0]:
-                x1, y1, x2, y2 = line
-
+            for x1, y1, x2, y2 in lines.reshape(-1, 4):
                 if x2 == x1:
                     continue
 
@@ -257,9 +255,9 @@ class LaneDetector:
                     continue
 
                 if slope < 0:
-                    left_segments.append(line)
+                    left_segments.append([x1, y1, x2, y2])
                 else:
-                    right_segments.append(line)
+                    right_segments.append([x1, y1, x2, y2])
 
         def build_lane(segments):
             if not segments:
@@ -393,13 +391,9 @@ class LaneDetector:
         method = "UFLDv2"
 
         if not left_lane or not right_lane:
-            fallback_left, fallback_right = (
-                self.opencv_fallback(frame)
-            )
-
-            left_lane = left_lane or fallback_left
-            right_lane = right_lane or fallback_right
-            method = "UFLDv2 + OpenCV fallback"
+            left_lane = []
+            right_lane = []
+            method = "UFLDv2"
 
         polygon = (
             left_lane + list(reversed(right_lane))

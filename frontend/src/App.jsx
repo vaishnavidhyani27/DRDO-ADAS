@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const BACKEND_URL =
-  " https://newport-vendors-favorite-trek.trycloudflare.com/detect";
+  "https://newport-vendors-favorite-trek.trycloudflare.com/detect";
 
 const REQUEST_INTERVAL_MS = 2500;
 const AUDIO_COOLDOWN_MS = 6000;
