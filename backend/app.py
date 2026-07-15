@@ -1,503 +1,208 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-
 import base64
 import os
-
 import cv2
 import numpy as np
 
 from detectors.vehicle_detector import VehicleDetector
 from detectors.pothole_detector import PotholeDetector
 from detectors.lane_detector import LaneDetector
-
+from detectors.driver_detector import DriverDetector
 
 app = Flask(__name__)
-
-CORS(
-    app,
-    resources={r"/*": {"origins": "*"}},
-    allow_headers=["Content-Type"],
-    methods=["GET", "POST", "OPTIONS"],
-)
-
-
-# --------------------------------------------------
-# Model paths and detector initialization
-# --------------------------------------------------
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-VEHICLE_MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "models",
-    "yolov8n.pt",
-)
-
-POTHOLE_MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "models",
-    "best.pt",
-)
-
-vehicle_detector = VehicleDetector(
-    VEHICLE_MODEL_PATH
-)
-
-pothole_detector = PotholeDetector(
-    POTHOLE_MODEL_PATH
-)
-
+vehicle_detector = VehicleDetector(os.path.join(BASE_DIR, "models", "yolov8n.pt"))
+pothole_detector = PotholeDetector(os.path.join(BASE_DIR, "models", "best.pt"))
 lane_detector = LaneDetector()
-
-
-# Previous vehicle information for basic tracking.
+driver_detector = DriverDetector()
 previous_vehicles = []
 
 
-# --------------------------------------------------
-# Image decoding
-# --------------------------------------------------
-
-def decode_image(image_data):
-    if not isinstance(image_data, str) or not image_data:
-        raise ValueError(
-            "Image data is missing or invalid"
-        )
-
-    if "," in image_data:
-        image_data = image_data.split(",", 1)[1]
-
+def decode_image(data):
+    if not isinstance(data, str) or not data:
+        raise ValueError("Image data is missing or invalid")
     try:
-        image_bytes = base64.b64decode(
-            image_data
+        encoded = data.split(",", 1)[1] if "," in data else data
+        frame = cv2.imdecode(
+            np.frombuffer(base64.b64decode(encoded), np.uint8),
+            cv2.IMREAD_COLOR,
         )
     except Exception as error:
-        raise ValueError(
-            "Invalid base64 image data"
-        ) from error
-
-    image_array = np.frombuffer(
-        image_bytes,
-        dtype=np.uint8,
-    )
-
-    frame = cv2.imdecode(
-        image_array,
-        cv2.IMREAD_COLOR,
-    )
-
+        raise ValueError("Invalid base64 image data") from error
     if frame is None:
-        raise ValueError(
-            "Unable to decode image"
-        )
-
+        raise ValueError("Unable to decode image")
     return frame
 
 
-# --------------------------------------------------
-# Wrong-way vehicle detection
-# --------------------------------------------------
-
-def box_center_and_area(box):
-    x1, y1, x2, y2 = box
-
-    center_x = (x1 + x2) / 2
-    center_y = (y1 + y2) / 2
-    area = max(1, (x2 - x1) * (y2 - y1))
-
-    return center_x, center_y, area
+def get_frame():
+    data = request.get_json(silent=True) or {}
+    if "image" not in data:
+        raise ValueError("No image received")
+    return decode_image(data["image"])
 
 
-def point_inside_lane(point, polygon):
-    if not polygon or len(polygon) < 4:
-        return False
-
-    polygon_array = np.asarray(
-        polygon,
-        dtype=np.int32,
-    )
-
-    return (
-        cv2.pointPolygonTest(
-            polygon_array,
-            point,
-            False,
-        )
-        >= 0
-    )
-
-
-def detect_wrong_way(
-    detections,
-    lane_polygon,
-):
-    """
-    Prototype wrong-way logic:
-
-    1. Vehicle must lie inside the current lane.
-    2. It must match a vehicle from the previous frame.
-    3. Its bounding-box area must grow noticeably,
-       indicating that it is approaching the camera.
-    """
-
+def detect_wrong_way(detections, lane_polygon):
     global previous_vehicles
 
-    vehicle_classes = {
-        "Bicycle",
-        "Car",
-        "Motorcycle",
-        "Bus",
-        "Truck",
-    }
+    if len(lane_polygon or []) < 4:
+        previous_vehicles = []
+        return {"wrong_way": False, "wrong_way_vehicles": []}
 
-    current_vehicles = []
-    wrong_way_detections = []
+    polygon = np.asarray(lane_polygon, np.int32)
+    allowed = {"Bicycle", "Car", "Motorcycle", "Bus", "Truck"}
+    current, wrong = [], []
 
-    for detection in detections:
-        if detection["class"] not in vehicle_classes:
+    for item in detections:
+        if item.get("class") not in allowed:
             continue
 
-        box = detection["bbox"]
-        center_x, center_y, area = (
-            box_center_and_area(box)
-        )
-
-        # Use the bottom centre because it represents
-        # where the vehicle touches the road.
-        road_point = (
-            int(center_x),
-            int(box[3]),
-        )
-
-        inside_lane = point_inside_lane(
-            road_point,
-            lane_polygon,
-        )
-
-        current_vehicle = {
-            "class": detection["class"],
-            "bbox": box,
-            "center_x": center_x,
-            "center_y": center_y,
+        x1, y1, x2, y2 = item["bbox"]
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        area = max(1, (x2 - x1) * (y2 - y1))
+        current_item = {
+            "class": item["class"],
+            "bbox": item["bbox"],
+            "cx": cx,
+            "cy": cy,
             "area": area,
-            "inside_lane": inside_lane,
         }
+        current.append(current_item)
 
-        current_vehicles.append(
-            current_vehicle
+        inside = cv2.pointPolygonTest(
+            polygon, (int(cx), int(y2)), False
+        ) >= 0
+        if not inside:
+            continue
+
+        matches = [old for old in previous_vehicles if old["class"] == item["class"]]
+        if not matches:
+            continue
+
+        match = min(
+            matches,
+            key=lambda old: (old["cx"] - cx) ** 2 + (old["cy"] - cy) ** 2,
         )
+        movement = ((match["cx"] - cx) ** 2 + (match["cy"] - cy) ** 2) ** 0.5
+        growth = (area - match["area"]) / max(match["area"], 1)
 
-        if not inside_lane:
-            continue
+        if movement <= 140 and growth > 0.12 and area > 5000:
+            wrong.append({
+                "class": item["class"],
+                "bbox": item["bbox"],
+                "area_growth": round(growth, 2),
+            })
 
-        best_match = None
-        best_distance = float("inf")
-
-        for previous in previous_vehicles:
-            if (
-                previous["class"]
-                != current_vehicle["class"]
-            ):
-                continue
-
-            movement_distance = (
-                (
-                    previous["center_x"]
-                    - center_x
-                )
-                ** 2
-                + (
-                    previous["center_y"]
-                    - center_y
-                )
-                ** 2
-            ) ** 0.5
-
-            if movement_distance < best_distance:
-                best_distance = movement_distance
-                best_match = previous
-
-        if best_match is None:
-            continue
-
-        # Allow matching within a moderate image distance.
-        if best_distance > 140:
-            continue
-
-        previous_area = best_match["area"]
-
-        area_growth = (
-            area - previous_area
-        ) / max(previous_area, 1)
-
-        # Growing by more than 12% suggests approach.
-        approaching = area_growth > 0.12
-
-        # Require a reasonably large vehicle to reduce
-        # distant false alarms.
-        large_enough = area > 5000
-
-        if approaching and large_enough:
-            wrong_way_detections.append(
-                {
-                    "class": detection["class"],
-                    "bbox": box,
-                    "area_growth": round(
-                        area_growth,
-                        2,
-                    ),
-                }
-            )
-
-    previous_vehicles = current_vehicles
-
-    return {
-        "wrong_way": (
-            len(wrong_way_detections) > 0
-        ),
-        "wrong_way_vehicles": (
-            wrong_way_detections
-        ),
-    }
+    previous_vehicles = current
+    return {"wrong_way": bool(wrong), "wrong_way_vehicles": wrong}
 
 
-# --------------------------------------------------
-# Routes
-# --------------------------------------------------
-
-@app.route("/", methods=["GET"])
+@app.get("/")
 def home():
-    return jsonify(
-        {
-            "service": "DRDO Integrated ADAS API",
-            "status": "running",
-            "vehicle_model": "loaded",
-            "pothole_model": "loaded",
-            "lane_model": "loaded",
-        }
-    )
+    return jsonify({
+        "service": "DRDO Integrated ADAS API",
+        "status": "running",
+        "vehicle_model": "loaded",
+        "pothole_model": "loaded",
+        "lane_model": "loaded",
+        "driver_model": "loaded",
+    })
 
 
-@app.route("/health", methods=["GET"])
+@app.get("/health")
 def health():
-    return jsonify(
-        {
-            "status": "healthy",
-            "vehicle_detector": "ready",
-            "pothole_detector": "ready",
-            "lane_detector": "ready",
-        }
-    )
+    return jsonify({
+        "status": "healthy",
+        "vehicle_detector": "ready",
+        "pothole_detector": "ready",
+        "lane_detector": "ready",
+        "driver_detector": "ready",
+    })
 
 
-@app.route(
-    "/detect",
-    methods=["POST", "OPTIONS"],
-)
+@app.route("/detect", methods=["POST", "OPTIONS"])
 def detect():
     if request.method == "OPTIONS":
         return "", 204
 
     try:
-        data = request.get_json(
-            silent=True
+        frame = get_frame()
+        vehicles = vehicle_detector.detect(frame)
+        potholes = pothole_detector.detect(frame)
+        lanes = lane_detector.detect(frame)
+
+        detections = vehicles["detections"] + potholes["detections"]
+        wrong = detect_wrong_way(
+            vehicles["detections"], lanes.get("lane_polygon", [])
         )
 
-        if not data or "image" not in data:
-            return jsonify(
-                {"error": "No image received"}
-            ), 400
+        vehicle_count = vehicles.get("vehicle_count", 0)
+        pedestrian_count = vehicles.get("pedestrian_count", 0)
+        pothole_count = potholes.get("pothole_count", 0)
+        nearest = vehicles.get("nearest_distance_m")
+        departure = lanes.get("lane_departure", False)
 
-        frame = decode_image(
-            data["image"]
-        )
-
-        vehicle_result = (
-            vehicle_detector.detect(frame)
-        )
-
-        pothole_result = (
-            pothole_detector.detect(frame)
-        )
-
-        lane_result = (
-            lane_detector.detect(frame)
-        )
-
-        detections = (
-            vehicle_result["detections"]
-            + pothole_result["detections"]
-        )
-
-        wrong_way_result = detect_wrong_way(
-            vehicle_result["detections"],
-            lane_result["lane_polygon"],
-        )
-
-        vehicle_count = (
-            vehicle_result["vehicle_count"]
-        )
-
-        pedestrian_count = (
-            vehicle_result[
-                "pedestrian_count"
-            ]
-        )
-
-        nearest_vehicle_distance = (
-            vehicle_result[
-                "nearest_distance_m"
-            ]
-        )
-
-        pothole_count = (
-            pothole_result[
-                "pothole_count"
-            ]
-        )
-
-        lane_departure = (
-            lane_result[
-                "lane_departure"
-            ]
-        )
-
-        wrong_way = (
-            wrong_way_result[
-                "wrong_way"
-            ]
-        )
-
-        # Alert priority.
-        if wrong_way:
-            alert = (
-                "Warning. Wrong way vehicle ahead"
-            )
-
-        elif lane_departure:
-            direction = (
-                lane_result[
-                    "departure_direction"
-                ]
-                or ""
-            )
-
-            alert = (
-                f"Warning. Lane departure "
-                f"{direction}"
-            ).strip()
-
-        elif pothole_count > 0:
+        if wrong["wrong_way"]:
+            alert = "Warning. Wrong way vehicle ahead"
+        elif departure:
+            direction = lanes.get("departure_direction") or ""
+            alert = f"Warning. Lane departure {direction}".strip()
+        elif pothole_count:
             alert = "Warning. Pothole ahead"
-
-        elif pedestrian_count > 0:
+        elif pedestrian_count:
             alert = "Pedestrian detected"
-
-        elif (
-            nearest_vehicle_distance
-            is not None
-            and nearest_vehicle_distance <= 4
-        ):
+        elif nearest is not None and nearest <= 4:
             alert = "Vehicle too close"
-
         elif vehicle_count >= 3:
             alert = "Traffic ahead"
-
         else:
             alert = "No Alert"
 
-        return jsonify(
-            {
-                "detections": detections,
-
-                "vehicle_count": vehicle_count,
-                "pedestrian_count": pedestrian_count,
-                "pothole_count": pothole_count,
-
-                "nearest_vehicle_distance_m": (
-                    nearest_vehicle_distance
-                ),
-                "nearest_distance_m": (
-                    nearest_vehicle_distance
-                ),
-
-                "left_lane": (
-                    lane_result[
-                        "left_lane"
-                    ]
-                ),
-                "right_lane": (
-                    lane_result[
-                        "right_lane"
-                    ]
-                ),
-                "lane_polygon": (
-                    lane_result[
-                        "lane_polygon"
-                    ]
-                ),
-                "lane_detected": (
-                    lane_result[
-                        "lane_detected"
-                    ]
-                ),
-                "lane_status": (
-                    lane_result[
-                        "lane_status"
-                    ]
-                ),
-                "lane_departure": (
-                    lane_departure
-                ),
-                "departure_direction": (
-                    lane_result[
-                        "departure_direction"
-                    ]
-                ),
-                "lane_center": (
-                    lane_result[
-                        "lane_center"
-                    ]
-                ),
-                "lane_offset_ratio": (
-                    lane_result[
-                        "offset_ratio"
-                    ]
-                ),
-
-                "wrong_way": wrong_way,
-                "wrong_way_vehicles": (
-                    wrong_way_result[
-                        "wrong_way_vehicles"
-                    ]
-                ),
-
-                "alert": alert,
-            }
-        )
+        return jsonify({
+            "detections": detections,
+            "vehicle_count": vehicle_count,
+            "pedestrian_count": pedestrian_count,
+            "pothole_count": pothole_count,
+            "nearest_vehicle_distance_m": nearest,
+            "nearest_distance_m": nearest,
+            "left_lane": lanes.get("left_lane", []),
+            "right_lane": lanes.get("right_lane", []),
+            "lane_polygon": lanes.get("lane_polygon", []),
+            "lane_detected": lanes.get("lane_detected", False),
+            "lane_status": lanes.get("lane_status", "Lane Not Detected"),
+            "lane_departure": departure,
+            "departure_direction": lanes.get("departure_direction"),
+            "lane_center": lanes.get("lane_center"),
+            "lane_offset_ratio": lanes.get("offset_ratio"),
+            **wrong,
+            "alert": alert,
+        })
 
     except ValueError as error:
-        return jsonify(
-            {"error": str(error)}
-        ), 400
-
+        return jsonify({"error": str(error)}), 400
     except Exception as error:
-        app.logger.exception(
-            "Detection failed"
-        )
+        app.logger.exception("Road detection failed")
+        return jsonify({"error": "Detection failed", "details": str(error)}), 500
 
-        return jsonify(
-            {
-                "error": "Detection failed",
-                "details": str(error),
-            }
-        ), 500
+
+@app.route("/detect-driver", methods=["POST", "OPTIONS"])
+def detect_driver():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    try:
+        return jsonify(driver_detector.detect(get_frame()))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception as error:
+        app.logger.exception("Driver detection failed")
+        return jsonify({
+            "error": "Driver detection failed",
+            "details": str(error),
+        }), 500
 
 
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=False,
-    )
+    app.run(host="0.0.0.0", port=5000, debug=False)
