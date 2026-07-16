@@ -1,4 +1,4 @@
-const BASE_URL = "http://34.100.209.136:5000";
+const BASE_URL = "/api";
 
 async function sendFrame(endpoint, image) {
   const response = await fetch(`${BASE_URL}${endpoint}`, {
