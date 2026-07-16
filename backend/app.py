@@ -146,17 +146,28 @@ def detect():
 
         if wrong["wrong_way"]:
             alert = "Warning. Wrong way vehicle ahead"
-        elif departure:
+
+        elif (
+            lanes.get("lane_detected", False)
+            and departure
+            and lanes.get("offset_ratio") is not None
+            and abs(float(lanes.get("offset_ratio"))) >= 0.30
+        ):
             direction = lanes.get("departure_direction") or ""
             alert = f"Warning. Lane departure {direction}".strip()
+
         elif pothole_count:
             alert = "Warning. Pothole ahead"
+
         elif pedestrian_count:
             alert = "Pedestrian detected"
-        elif nearest is not None and nearest <= 4:
+
+        elif nearest is not None and nearest <= 2.5:
             alert = "Vehicle too close"
+
         elif vehicle_count >= 3:
             alert = "Traffic ahead"
+
         else:
             alert = "No Alert"
 

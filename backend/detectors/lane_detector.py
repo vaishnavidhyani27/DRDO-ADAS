@@ -132,18 +132,18 @@ class LaneDetector:
         # ---- temporal smoothing state (persists across detect() calls) ----
         self.prev_left_lane = None
         self.prev_right_lane = None
-        self.smoothing_alpha = 0.55   # weight given to the newest frame
-        self.max_jump_px = 120        # snap instead of blend past this jump
+        self.smoothing_alpha = 0.35   # weight given to the newest frame
+        self.max_jump_px = 80        # snap instead of blend past this jump
         self._left_miss = 0
         self._right_miss = 0
-        self.max_miss_frames = 20      # frames before a stale lane is dropped
+        self.max_miss_frames = 4      # frames before a stale lane is dropped
  
         # ---- lane-departure hysteresis state ----
         self._departure_streak = 0
         self._safe_streak = 0
         self._last_departure_state = False
         self._last_direction = None
-        self.confirm_frames = 3       # consecutive frames needed to flip
+        self.confirm_frames = 5       # consecutive frames needed to flip
  
         print(f"UFLDv2 lane detector loaded on {self.device}")
  
@@ -467,7 +467,10 @@ class LaneDetector:
  
         lane_width = right_x - left_x
  
-        if lane_width < width * 0.05:
+        if (
+            lane_width < width * 0.08
+            or lane_width > width * 0.90
+        ):
             # Left/right boundaries have effectively collapsed onto each
             # other - an unreliable reading, not a real lane departure.
             self._departure_streak = 0
@@ -484,7 +487,7 @@ class LaneDetector:
         lane_center = (left_x + right_x) / 2
         offset = (width / 2 - lane_center) / lane_width
  
-        raw_departure = abs(offset) > 0.22
+        raw_departure = abs(offset) > 0.30
         raw_direction = "left" if offset < 0 else "right"
  
         # Hysteresis: require several consecutive frames of agreement
