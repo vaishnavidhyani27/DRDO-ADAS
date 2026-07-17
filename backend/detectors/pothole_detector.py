@@ -11,7 +11,7 @@ class PotholeDetector:
 
         results = self.model.predict(
             source=frame,
-            conf=0.65,
+            conf=0.40,
             iou=0.35,
             imgsz=960,
             device="cpu",
@@ -36,27 +36,23 @@ class PotholeDetector:
                 aspect_ratio = box_width / box_height
 
                 # 1. Potholes must be in the lower road region.
-                if box_center_y < frame_height * 0.58:
+                if box_center_y < frame_height * 0.42:
                     continue
 
-                # 2. Ignore extreme roadside regions.
+                # 2. Ignore only the extreme edges of the frame.
                 if (
-                    box_center_x < frame_width * 0.12
-                    or box_center_x > frame_width * 0.88
+                    box_center_x < frame_width * 0.05
+                    or box_center_x > frame_width * 0.95
                 ):
                     continue
 
-                # 3. Real potholes are usually wider than tall.
-                if aspect_ratio < 1.15:
+                # 3. Reject extremely large false detections.
+                if area_ratio > 0.25:
                     continue
 
-                # 4. Reject tiny noise detections.
-                if area_ratio < 0.0008:
-                    continue
-
-                # 5. Reject very large detections such as cars,
-                # buildings, road regions, or shadows.
-                if area_ratio > 0.10:
+                # 4. Reject extremely thin or tall objects,
+                # but allow square-looking potholes.
+                if aspect_ratio < 0.35 or aspect_ratio > 5.0:
                     continue
 
                 detections.append(
